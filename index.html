@@ -3,8 +3,31 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <title>Anecdote Academy</title>
+    <title>Anecdote</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              primary: {
+                50: '#FDF4F5',
+                100: '#FAE6E8',
+                200: '#F5D0D4',
+                300: '#EEA9B0',
+                400: '#E57983',
+                500: '#DA4F5B',
+                600: '#CB202D',
+                700: '#A61A25',
+                800: '#88151E',
+                900: '#72121A',
+                950: '#420609',
+              }
+            }
+          }
+        }
+      }
+    </script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
       body {

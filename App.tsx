@@ -1,56 +1,166 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Sparkles, History, Search, BookOpenCheck, Globe } from 'lucide-react';
-import { Anecdote, GenerationState } from './types';
+
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { Sparkles, History, Search, BookOpenCheck, Globe, LogOut, User as UserIcon } from 'lucide-react';
+import { Anecdote, GenerationState, Suggestion, User } from './types';
 import { generateAnecdote } from './services/gemini';
-import { SUGGESTIONS, CATEGORY_COLORS, SUPPORTED_LANGUAGES } from './constants';
+import { initGA, trackEvent, trackPageView } from './services/analytics';
+import { DEFAULT_SUGGESTIONS, CATEGORY_COLORS, SUPPORTED_LANGUAGES } from './constants';
 import { Button } from './components/Button';
 import { AnecdoteCard } from './components/AnecdoteCard';
 import { HistoryItem } from './components/HistoryItem';
+import { LoginScreen } from './components/LoginScreen';
 
 const App: React.FC = () => {
+  const [user, setUser] = useState<User | null>(null);
   const [topic, setTopic] = useState('');
   const [language, setLanguage] = useState('English');
   const [currentAnecdote, setCurrentAnecdote] = useState<Anecdote | null>(null);
   const [history, setHistory] = useState<Anecdote[]>([]);
   const [status, setStatus] = useState<GenerationState>({ isLoading: false, error: null });
   const [view, setView] = useState<'home' | 'history'>('home');
+  const [pendingSharedTopic, setPendingSharedTopic] = useState<string | null>(null);
   
   // Ref to scroll to result
   const resultRef = useRef<HTMLDivElement>(null);
 
+  // Initialize Analytics
   useEffect(() => {
-    // Load history from local storage on mount
-    const saved = localStorage.getItem('anecdote_history');
-    if (saved) {
+    initGA();
+    trackPageView(window.location.pathname);
+  }, []);
+
+  // Load user session on mount
+  useEffect(() => {
+    const savedUser = localStorage.getItem('anecdote_user');
+    if (savedUser) {
       try {
-        setHistory(JSON.parse(saved));
+        setUser(JSON.parse(savedUser));
       } catch (e) {
-        console.error("Failed to load history", e);
+        console.error("Failed to parse user session");
+      }
+    }
+
+    // Check for shared link params
+    const params = new URLSearchParams(window.location.search);
+    const sharedTopic = params.get('shared_topic');
+    if (sharedTopic) {
+      setPendingSharedTopic(sharedTopic);
+      // If no user is logged in (including checking localStorage), force guest login
+      if (!savedUser) {
+        handleGuestLogin();
       }
     }
   }, []);
 
+  // Helper to get storage key based on user
+  const getHistoryKey = (u: User) => {
+    return `anecdote_history_${u.isGuest ? 'guest' : u.name.trim().toLowerCase()}`;
+  };
+
+  // Load history when user changes
+  useEffect(() => {
+    if (!user) {
+      setHistory([]);
+      return;
+    }
+
+    const key = getHistoryKey(user);
+    const savedHistory = localStorage.getItem(key);
+    if (savedHistory) {
+      try {
+        setHistory(JSON.parse(savedHistory));
+      } catch (e) {
+        console.error("Failed to load history", e);
+      }
+    } else {
+      setHistory([]);
+    }
+    
+    // Reset view to home on login
+    setView('home');
+    if (!pendingSharedTopic) {
+      setCurrentAnecdote(null);
+      setTopic('');
+    }
+  }, [user]);
+
+  // Handle pending shared topic once user is authenticated
+  useEffect(() => {
+    if (user && pendingSharedTopic) {
+      handleGenerate(pendingSharedTopic);
+      setPendingSharedTopic(null);
+      // Clean up URL
+      const newUrl = window.location.pathname;
+      window.history.replaceState({}, '', newUrl);
+    }
+  }, [user, pendingSharedTopic]);
+
+  const handleLogin = (name: string) => {
+    const newUser = { name, isGuest: false };
+    setUser(newUser);
+    localStorage.setItem('anecdote_user', JSON.stringify(newUser));
+    trackEvent('login', { method: 'named_user' });
+  };
+
+  const handleGuestLogin = () => {
+    const guestUser = { name: 'Guest', isGuest: true };
+    setUser(guestUser);
+    localStorage.setItem('anecdote_user', JSON.stringify(guestUser));
+    trackEvent('login', { method: 'guest' });
+  };
+
+  const handleLogout = () => {
+    trackEvent('logout');
+    setUser(null);
+    localStorage.removeItem('anecdote_user');
+    setCurrentAnecdote(null);
+    setHistory([]);
+    setTopic('');
+  };
+
   const saveToHistory = (anecdote: Anecdote) => {
+    if (!user) return;
+
+    // Update state with full object (including image for current session)
     const newHistory = [anecdote, ...history.filter(h => h.title !== anecdote.title)].slice(0, 50);
     setHistory(newHistory);
-    localStorage.setItem('anecdote_history', JSON.stringify(newHistory));
+    
+    // Create a copy for storage that excludes the heavy base64 image
+    const historyForStorage = newHistory.map(({ imageUrl, ...rest }) => rest);
+    const key = getHistoryKey(user);
+
+    try {
+      localStorage.setItem(key, JSON.stringify(historyForStorage));
+    } catch (e) {
+      console.warn("Storage full, attempting to trim history...", e);
+      // Fallback: Try saving only the last 10 items if quota exceeded
+      try {
+        localStorage.setItem(key, JSON.stringify(historyForStorage.slice(0, 10)));
+      } catch (retryError) {
+        console.error("Failed to save history even after trimming.", retryError);
+      }
+    }
   };
 
   const handleGenerate = async (selectedTopic: string = topic) => {
     if (!selectedTopic.trim()) return;
 
+    trackEvent('generate_story_start', { topic: selectedTopic, language });
+
     setStatus({ isLoading: true, error: null });
-    // Don't clear current anecdote immediately if we are generating from a related topic, 
-    // it feels better to replace it when done, or we can clear it. 
-    // Let's clear it to show loading state clearly.
     setCurrentAnecdote(null);
-    setTopic(selectedTopic); // Update the input field to reflect the new topic
+    setTopic(selectedTopic); 
     setView('home');
 
     try {
       const result = await generateAnecdote(selectedTopic, language);
       setCurrentAnecdote(result);
       saveToHistory(result);
+      trackEvent('generate_story_success', { 
+        topic: selectedTopic, 
+        language,
+        anecdote_title: result.title 
+      });
       
       // Small delay to ensure render before scroll
       setTimeout(() => {
@@ -58,22 +168,46 @@ const App: React.FC = () => {
       }, 100);
       
     } catch (err: any) {
+      console.error(err);
       setStatus({ isLoading: false, error: err.message || "Something went wrong." });
+      trackEvent('generate_story_error', { 
+        topic: selectedTopic, 
+        error_message: err.message 
+      });
     } finally {
       setStatus(prev => ({ ...prev, isLoading: false }));
     }
   };
 
   const handleHistoryClick = (anecdote: Anecdote) => {
+    trackEvent('view_history_item', { title: anecdote.title });
     setCurrentAnecdote(anecdote);
     setView('home');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const handleSuggestionClick = (label: string) => {
+    trackEvent('click_suggestion', { label });
     setTopic(label);
     handleGenerate(label);
   };
+
+  // Derive suggestions from history + defaults
+  const currentSuggestions: Suggestion[] = useMemo(() => {
+    const historySuggestions: Suggestion[] = history
+      .map(h => ({ label: h.topic, category: 'General' as const }))
+      .filter((v, i, a) => a.findIndex(t => t.label === v.label) === i)
+      .slice(0, 3);
+
+    const historyLabels = new Set(historySuggestions.map(h => h.label));
+    const relevantDefaults = DEFAULT_SUGGESTIONS.filter(s => !historyLabels.has(s.label));
+
+    return [...historySuggestions, ...relevantDefaults].slice(0, 6);
+  }, [history]);
+
+  if (!user) {
+    return <LoginScreen onLogin={handleLogin} onGuest={handleGuestLogin} />;
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 pb-20 md:pb-10">
@@ -82,34 +216,63 @@ const App: React.FC = () => {
         <div className="max-w-2xl mx-auto px-4 py-3 flex justify-between items-center">
           <div 
             className="flex items-center gap-2 cursor-pointer" 
-            onClick={() => { setView('home'); setCurrentAnecdote(null); setTopic(''); }}
+            onClick={() => { 
+              setView('home'); 
+              setCurrentAnecdote(null); 
+              setTopic(''); 
+              trackPageView('/home');
+            }}
           >
-            <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center text-white">
+            <div className="w-8 h-8 bg-primary-600 rounded-lg flex items-center justify-center text-white shadow-md shadow-primary-200">
               <BookOpenCheck size={18} strokeWidth={3} />
             </div>
-            <h1 className="font-bold text-slate-800 tracking-tight hidden sm:block">Anecdote<span className="text-indigo-600">Academy</span></h1>
-            <h1 className="font-bold text-slate-800 tracking-tight sm:hidden">AA</h1>
+            <h1 className="font-bold text-slate-800 tracking-tight text-lg sm:text-xl hidden sm:block">Anecdote</h1>
           </div>
           
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 sm:gap-3">
+            <div className="flex items-center gap-2 bg-slate-100 rounded-full px-3 py-1.5 border border-slate-200">
+              <UserIcon className="w-3.5 h-3.5 text-slate-500" />
+              <span className="text-xs sm:text-sm font-semibold text-slate-700 max-w-[80px] sm:max-w-[120px] truncate">
+                {user.isGuest ? 'Guest' : user.name}
+              </span>
+            </div>
+
+            <div className="h-6 w-px bg-slate-200 mx-1"></div>
+
             <div className="relative">
               <select
                 value={language}
-                onChange={(e) => setLanguage(e.target.value)}
-                className="appearance-none bg-slate-100 border-none text-slate-700 text-xs sm:text-sm font-medium py-2 pl-3 pr-8 rounded-full focus:ring-2 focus:ring-indigo-500 outline-none cursor-pointer hover:bg-slate-200 transition-colors max-w-[120px] sm:max-w-none truncate"
+                onChange={(e) => {
+                  setLanguage(e.target.value);
+                  trackEvent('change_language', { language: e.target.value });
+                }}
+                className="appearance-none bg-transparent border-none text-slate-600 text-xs sm:text-sm font-medium py-1 pl-1 pr-6 rounded-full focus:ring-0 outline-none cursor-pointer hover:text-primary-600 transition-colors max-w-[80px] sm:max-w-[100px] truncate"
               >
                 {SUPPORTED_LANGUAGES.map(lang => (
                   <option key={lang} value={lang}>{lang}</option>
                 ))}
               </select>
-              <Globe className="w-3.5 h-3.5 text-slate-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <Globe className="w-3.5 h-3.5 text-slate-400 absolute right-1 top-1/2 -translate-y-1/2 pointer-events-none" />
             </div>
 
             <button 
-              onClick={() => setView(view === 'home' ? 'history' : 'home')}
-              className={`p-2 rounded-full transition-colors ${view === 'history' ? 'bg-indigo-100 text-indigo-700' : 'text-slate-500 hover:bg-slate-100'}`}
+              onClick={() => {
+                const newView = view === 'home' ? 'history' : 'home';
+                setView(newView);
+                trackPageView(newView === 'history' ? '/history' : '/home');
+              }}
+              className={`p-2 rounded-full transition-colors ${view === 'history' ? 'bg-primary-100 text-primary-700' : 'text-slate-400 hover:bg-slate-100 hover:text-slate-600'}`}
+              title="History"
             >
               <History size={20} />
+            </button>
+            
+            <button 
+              onClick={handleLogout}
+              className="p-2 rounded-full text-slate-400 hover:bg-rose-50 hover:text-rose-600 transition-colors"
+              title="Logout"
+            >
+              <LogOut size={20} />
             </button>
           </div>
         </div>
@@ -119,7 +282,9 @@ const App: React.FC = () => {
         
         {view === 'history' && (
           <div className="animate-fade-in space-y-4">
-            <h2 className="text-xl font-bold text-slate-800">Your Discovery Log</h2>
+            <h2 className="text-xl font-bold text-slate-800">
+              {user.isGuest ? 'Guest History' : `${user.name}'s Discovery Log`}
+            </h2>
             {history.length === 0 ? (
               <div className="text-center py-12 text-slate-400">
                 <History className="w-12 h-12 mx-auto mb-3 opacity-20" />
@@ -143,7 +308,7 @@ const App: React.FC = () => {
               {!currentAnecdote && (
                 <div className="text-center space-y-2 py-8">
                   <h2 className="text-3xl font-extrabold text-slate-800">
-                    What will you <br/><span className="text-indigo-600">learn today?</span>
+                    What will you <br/><span className="text-primary-600">learn today?</span>
                   </h2>
                   <p className="text-slate-500 text-sm max-w-xs mx-auto">
                     Enter a topic (e.g., Gravity, French Revolution, Calculus) to find the story behind it.
@@ -151,7 +316,7 @@ const App: React.FC = () => {
                 </div>
               )}
 
-              <div className="bg-white p-2 rounded-2xl shadow-sm border border-slate-200 flex items-center gap-2 focus-within:ring-2 focus-within:ring-indigo-500/20 focus-within:border-indigo-500 transition-all">
+              <div className="bg-white p-2 rounded-2xl shadow-sm border border-slate-200 flex items-center gap-2 focus-within:ring-2 focus-within:ring-primary-500/20 focus-within:border-primary-500 transition-all">
                 <Search className="w-5 h-5 text-slate-400 ml-2" />
                 <input
                   type="text"
@@ -166,7 +331,7 @@ const App: React.FC = () => {
               {/* Suggestions Chips - Hide if we have a result to reduce clutter */}
               {!currentAnecdote && (
                 <div className="flex flex-wrap justify-center gap-2">
-                  {SUGGESTIONS.map((suggestion) => (
+                  {currentSuggestions.map((suggestion) => (
                     <button
                       key={suggestion.label}
                       onClick={() => handleSuggestionClick(suggestion.label)}
@@ -204,7 +369,10 @@ const App: React.FC = () => {
               <div ref={resultRef} className="pb-8 space-y-6">
                 <AnecdoteCard 
                   anecdote={currentAnecdote} 
-                  onRelatedTopicClick={handleGenerate} 
+                  onRelatedTopicClick={(related) => {
+                    trackEvent('click_related_topic', { topic: related });
+                    handleGenerate(related);
+                  }} 
                 />
                 
                 <div className="flex justify-center">
@@ -214,6 +382,7 @@ const App: React.FC = () => {
                         setCurrentAnecdote(null);
                         setTopic('');
                         window.scrollTo({ top: 0, behavior: 'smooth' });
+                        trackEvent('explore_new_topic_click');
                     }}
                    >
                      Explore New Topic

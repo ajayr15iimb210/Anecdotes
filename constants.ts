@@ -1,6 +1,6 @@
 import { Suggestion } from './types';
 
-export const SUGGESTIONS: Suggestion[] = [
+export const DEFAULT_SUGGESTIONS: Suggestion[] = [
   { label: 'Newton\'s Apple', category: 'Science' },
   { label: 'Pythagoras', category: 'Math' },
   { label: 'The Trojan Horse', category: 'History' },

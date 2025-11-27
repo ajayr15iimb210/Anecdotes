@@ -12,7 +12,7 @@ const anecdoteSchema: Schema = {
     },
     story: {
       type: Type.STRING,
-      description: "The main anecdote or real-life story. It should be engaging, approximately 150-200 words, and written in a storytelling tone.",
+      description: "A compelling narrative anecdote focused on a specific PERSON and a specific MOMENT in time. Do NOT write a general summary or encyclopedia entry. It must have a protagonist, action, and a conclusion. Example: Instead of describing the Cellular Jail generally, tell the specific story of how Veer Savarkar used thorns to write poetry on the walls while in solitary confinement.",
     },
     takeaway: {
       type: Type.STRING,
@@ -20,7 +20,7 @@ const anecdoteSchema: Schema = {
     },
     funFact: {
       type: Type.STRING,
-      description: "A quick, surprising one-sentence fact related to the topic.",
+      description: "A quick, surprising, and strictly fact-checked one-sentence fact related to the topic. Do not include myths, rumors, or unverified internet trivia.",
     },
     emoji: {
       type: Type.STRING,
@@ -65,15 +65,29 @@ export const generateAnecdote = async (topic: string, language: string = "Englis
       contents: `Generate an educational and entertaining anecdote about this academic topic: "${topic}". 
       Target Language: ${language}.
       
-      Focus on a real-life event, a historical figure's quirk, or an accidental discovery that explains the concept.
-      Make it fun for students.
+      STRICT REQUIREMENT: This must be a STORY, not a description.
+      - It MUST have a specific main character (historical figure, scientist, or witness).
+      - It MUST describe a specific scene or event (a moment of discovery, a specific conflict, a conversation).
+      - Do NOT simply list facts or describe a place/concept generally.
+      
+      Example of bad output: "The Taj Mahal was built in 1632 by Shah Jahan to house the tomb of his favorite wife..." (This is a summary).
+      Example of good output: "In 1631, Emperor Shah Jahan locked himself in his chambers for eight days, refusing food or water, after hearing the news that his beloved Mumtaz had died in childbirth..." (This is a story).
+      
+      CRITICAL: 
+      1. Prioritize factual accuracy. Do not propagate common myths as absolute fact.
+      2. If a popular story is a myth (e.g. Newton's apple hitting his head), clarify that it is a legend or "popularly believed".
+      3. Verify the "Fun Fact" is scientifically or historically accurate.
       
       IMPORTANT: ensure all content fields (title, story, takeaway, funFact, relatedTopics, toughWords, ncertTopic) are written in ${language}.`,
       config: {
         responseMimeType: "application/json",
         responseSchema: anecdoteSchema,
-        systemInstruction: `You are a master storyteller and educator. Your goal is to make dry academic subjects fascinating by revealing the human stories behind them. Always write the content in the requested language: ${language}.`,
-        temperature: 0.7, 
+        systemInstruction: `You are a master storyteller. Your goal is to bring history and science to life through specific, human-centric stories. 
+        NEVER write generic summaries. 
+        ALWAYS focus on a specific individual facing a specific challenge or moment of realization. 
+        You are strictly factual but narrative-driven. 
+        Always write the content in the requested language: ${language}.`,
+        temperature: 0.3, 
       },
     });
 

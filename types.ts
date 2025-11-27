@@ -27,3 +27,8 @@ export interface Suggestion {
   label: string;
   category: SubjectCategory;
 }
+
+export interface User {
+  name: string;
+  isGuest: boolean;
+}
